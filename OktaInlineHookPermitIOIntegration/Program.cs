@@ -8,9 +8,12 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 
 builder.Services.AddOpenApi();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddScoped<IConfigHelper, ConfigHelper>();
 builder.Services.AddScoped<IOktaUserRepository, OktaUserRepository>();
+builder.Services.AddScoped<IPermitAuthorizationService, PermitAuthorizationService>();
 
 builder.Services.AddHttpClient<IPermitApiClient, PermitApiClient>(client =>
 {

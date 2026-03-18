@@ -1,8 +1,8 @@
 ﻿namespace OktaInlineHookPermitIOIntegration.Models;
 
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
 
 public record PermitAssignRoleRequest(
-    [property: JsonProperty("roles")] string[] Roles,
-    [property: JsonProperty("tenant")] string Tenant
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("tenant")] string Tenant
 );

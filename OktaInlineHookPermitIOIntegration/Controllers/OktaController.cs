@@ -1,9 +1,9 @@
-using Dapper;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.SqlClient;
+﻿using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json.Linq;
 using OktaInlineHookPermitIOIntegration.Repository;
 using OktaInlineHookPermitIOIntegration.Services;
+using PermitSDK.OpenAPI.Models;
+
 
 namespace OktaInlineHookPermitIOIntegration.Controllers;
 
@@ -11,21 +11,23 @@ namespace OktaInlineHookPermitIOIntegration.Controllers;
 [Route("api/okta")]
 public class OktaController : ControllerBase
 {
-    private readonly IPermitApiClient _permitApi;
     private readonly ILogger<OktaController> _logger;
     private readonly IOktaUserRepository _oktaUserRepository;
-    private readonly  IConfiguration _configuration;
+    private readonly IConfiguration _configuration;
+    private readonly IPermitAuthorizationService _authorizationService;
+    private static readonly HashSet<string> _knownUser = new();
+    private static readonly HashSet<string> _knownRoles = new();
 
     public OktaController(
-        IPermitApiClient permitApiClient,
         ILogger<OktaController> logger,
         IConfiguration configuration,
-        IOktaUserRepository oktaUserRepository)
+        IOktaUserRepository oktaUserRepository,
+        IPermitAuthorizationService authorizationService)
     {
-        _permitApi = permitApiClient;
         _logger = logger;
         _configuration = configuration;
         _oktaUserRepository = oktaUserRepository;
+        _authorizationService = authorizationService;
     }
 
     [HttpPost("token-hook")]
@@ -41,7 +43,7 @@ public class OktaController : ControllerBase
             return Ok(new { commands = Array.Empty<object>() });
 
         // Find user in Permit and get their roles and associated tenants. If the user doesn't exist in Permit, return an empty command list.
-        var permitUser = await _permitApi.SyncUserAsync(email);
+        var permitUser = await _authorizationService.GetUserAsync(email);
 
         if (permitUser is null)
             return Ok(new { commands = Array.Empty<object>() });
@@ -81,107 +83,169 @@ public class OktaController : ControllerBase
         return Ok(new { verification = verificationValue });
     }
 
-    [HttpPost("user-created")]
-    public async Task<IActionResult> HandleUserCreated([FromBody] JObject payload)
+    [HttpGet("user-updated")]
+    public IActionResult VerifyUserProfileUpdatedEventHook()
     {
-        var events = payload.SelectToken("data.events");
-        if (events == null)
-            return Ok();
-
-        foreach (var evt in events)
-        {
-            var userId = evt.SelectToken("target[0].id")?.ToString();
-            var email = evt.SelectToken("target[0].alternateId")?.ToString();
-            var displayName = evt.SelectToken("target[0].displayName")?.ToString();
-
-            if (string.IsNullOrEmpty(email))
-                continue;
-
-            var nameParts = displayName?.Split(' ', 2) ?? [];
-            var firstName = nameParts.ElementAtOrDefault(0) ?? "";
-            var lastName = nameParts.ElementAtOrDefault(1) ?? "";
-
-            await _permitApi.CreateUserAsync(email, firstName, lastName);
-        }
-
-        return Ok();
+        var verificationValue = Request.Headers["x-okta-verification-challenge"].ToString();
+        return Ok(new { verification = verificationValue });
     }
 
+    [HttpGet("user-deleted")]
+    public IActionResult VerifyUserProfileDeletedEventHook()
+    {
+        var verificationValue = Request.Headers["x-okta-verification-challenge"].ToString();
+        return Ok(new { verification = verificationValue });
+    }
+
+    // Option 1
     //[HttpPost("user-created")]
     //public async Task<IActionResult> HandleUserCreated([FromBody] JObject payload)
     //{
-    //    _logger.LogInformation("Event Hook Payload: {Payload}", payload.ToString());
-
     //    var events = payload.SelectToken("data.events");
     //    if (events == null)
     //        return Ok();
 
     //    foreach (var evt in events)
     //    {
+    //        var userId = evt.SelectToken("target[0].id")?.ToString();
     //        var email = evt.SelectToken("target[0].alternateId")?.ToString();
+    //        var displayName = evt.SelectToken("target[0].displayName")?.ToString();
 
     //        if (string.IsNullOrEmpty(email))
     //            continue;
 
-    //        // Busca o perfil completo do usu�rio via Okta API
-    //        var userId = evt.SelectToken("target[0].id")?.ToString();
-    //        var user = await GetOktaUserProfile(userId);
+    //        var nameParts = displayName?.Split(' ', 2) ?? [];
+    //        var firstName = nameParts.ElementAtOrDefault(0) ?? "";
+    //        var lastName = nameParts.ElementAtOrDefault(1) ?? "";
 
-    //        var tenantId = user?.SelectToken("profile.tenantId")?.ToString() ?? "default";
-    //        var permitRoles = user?.SelectToken("profile.permitRoles")?.ToString() ?? "";
-    //        var firstName = user?.SelectToken("profile.firstName")?.ToString() ?? "";
-    //        var lastName = user?.SelectToken("profile.lastName")?.ToString() ?? "";
-
-    //        var roles = permitRoles
-    //            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-    //            .ToArray();
-
-    //        // 1. Cria usu�rio no Permit.io
-    //        await CreatePermitUser(email, firstName, lastName);
-
-    //        // 2. Atribui roles no tenant
-    //        foreach (var role in roles)
-    //        {
-    //            await AssignPermitRole(email, role, tenantId);
-    //        }
+    //        await _authorizationService.CreateUserAsync(email, firstName, lastName);
     //    }
 
     //    return Ok();
     //}
 
-    private async Task<JObject?> GetOktaUserProfile(string userId)
+
+    ////Option 2
+    [HttpPost("user-created")]
+    public async Task<IActionResult> HandleUserCreatedV2([FromBody] JObject payload)
     {
-        var oktaDomain = _configuration["OktaHook:BaseUrl"];
-        var apiToken = _configuration["Okta:ApiToken"]; // Okta API token
+        _logger.LogInformation("Event Hook Payload: {Payload}", payload.ToString());
 
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.Add("Authorization", $"SSWS {apiToken}");
+        var events = payload.SelectToken("data.events");
+        if (events == null)
+            return Ok();
 
-        var response = await client.GetAsync($"{oktaDomain}/api/v1/users/{userId}");
-        if (!response.IsSuccessStatusCode) return null;
+        foreach (var evt in events)
+        {
+            var email = evt.SelectToken("target[0].alternateId")?.ToString();
 
-        return JObject.Parse(await response.Content.ReadAsStringAsync());
+            if (string.IsNullOrEmpty(email))
+                continue;
+
+            // Busca o perfil completo do usuário via Okta API
+            var userId = evt.SelectToken("target[0].id")?.ToString();
+            // var user = await _authorizationService.GetOktaUserProfile(userId);
+            var displayName = evt.SelectToken("target[0].displayName")?.ToString();
+            var nameParts = displayName?.Split(' ', 2) ?? [];
+            var firstName = nameParts.ElementAtOrDefault(0) ?? "";
+            var lastName = nameParts.ElementAtOrDefault(1) ?? "";
+
+            // var tenantId = user?.SelectToken("profile.tenantId")?.ToString() ?? "default";
+            //var permitRoles = user?.SelectToken("profile.permitRoles")?.ToString() ?? "";
+
+
+            //var roles = permitRoles
+            //    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            //    .ToArray();
+
+            var userMetis = await _oktaUserRepository.GetUserMetisData(email);
+            if (userMetis is null)
+                continue;
+
+            // 1. Create user in Permit.io
+            //await _authorizationService.CreateUserAsync(new PermitSyncUserRequest(
+            //        Key: SanitizeEmail(email),
+            //        Email: SanitizeEmail(email),
+            //        FirstName: firstName,
+            //        LastName: lastName,
+            //        Attributes: null));
+
+
+
+            // a block in case okta call api multiple times.
+            if (_knownUser.Add(email))
+            {
+                foreach (var role in userMetis.Roles)
+                {
+                    var roleKey = ToPermitPattern(role);
+                    _logger.LogInformation("Processing role: original={Original}, key={Key}", role, roleKey);
+
+                    await _authorizationService.GetOrCreateRoleAsync(roleKey, role);
+
+                }
+
+                var roleAssignments = userMetis.Roles.Select(role => new UserRoleCreate
+                {
+                    Role = ToPermitPattern(role),
+                    Tenant = userMetis.Tenant.ToLower()
+                }).ToList();
+
+                await _authorizationService.CreateUserAsync(new UserCreate
+                {
+                    Key = SanitizeEmail(email),
+                    Email = SanitizeEmail(email),
+                    First_name = firstName,
+                    Last_name = lastName,
+                    Role_assignments = roleAssignments
+                });
+            }
+
+
+
+            // 2. Assign the roles and tenant
+            //foreach (var role in userMetis.Roles)
+            //{
+            //    var roleKey = ToPermitPattern(role);
+            //    // a block in case okta call api multiple times.
+            //    if (_knownRoles.Add(roleKey))
+            //    {
+            //        await _authorizationService.GetRoleAsync(roleKey, role);
+            //        await _authorizationService.AssignRoleAsync(SanitizeEmail(email), roleKey, userMetis.Tenant.ToLower());
+            //    }
+            //}
+        }
+
+        return Ok();
     }
 
-    private async Task CreatePermitUser(string email, string firstName, string lastName)
+    private static string SanitizeEmail(string email)
     {
-        var permitKey = _configuration["Permit:ApiKey"];
-        var projectId = _configuration["Permit:ProjectId"];
-        var envId = _configuration["Permit:EnvironmentId"];
+        return email.Replace(".invalid", "", StringComparison.OrdinalIgnoreCase).Trim();
+    }
 
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {permitKey}");
+    private static string ToPermitPattern(string metisRole)
+    {
+        return metisRole
+            .Trim()
+            .ToLower()
+            .Replace(" ", "-")
+            .Replace("/", "-");
+        // "Administrative Assistant" → "administrative-assistant"
+        // "Administration / Operations" → "administration---operations"
+    }
 
-        var body = new
-        {
-            key = email,
-            email,
-            first_name = firstName,
-            last_name = lastName
-        };
+    [HttpGet("user-updated")]
+    public IActionResult UserProfileUpdated()
+    {
+        var verificationValue = Request.Headers["x-okta-verification-challenge"].ToString();
+        return Ok(new { verification = verificationValue });
+    }
 
-        await client.PostAsJsonAsync(
-            $"https://api.permit.io/v2/facts/{projectId}/{envId}/users", body);
+    [HttpGet("user-deleted")]
+    public IActionResult UserProfileDeleted()
+    {
+        var verificationValue = Request.Headers["x-okta-verification-challenge"].ToString();
+        return Ok(new { verification = verificationValue });
     }
 
     private async Task AssignPermitRole(string email, string role, string tenant)
@@ -224,7 +288,7 @@ public class OktaController : ControllerBase
                 siteType = await _oktaUserRepository.GetSiteTypeBySalesforceIdAsync(salesforceId);
                 if (!string.IsNullOrEmpty(siteType))
                 {
-                    await _oktaUserRepository.SetSiteType(siteType, salesforceId);
+                    await _oktaUserRepository.UpdateSiteType(siteType, salesforceId);
 
                     _logger.LogInformation("SiteType {SiteType} set for user with SalesforceId {SalesforceId}", siteType, salesforceId);
                 }

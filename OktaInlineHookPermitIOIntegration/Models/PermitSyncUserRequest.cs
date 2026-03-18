@@ -1,11 +1,11 @@
 ﻿namespace OktaInlineHookPermitIOIntegration.Models;
 
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
 
 public record PermitSyncUserRequest(
-    [property: JsonProperty("key")] string Key,
-    [property: JsonProperty("email")] string Email,
-    [property: JsonProperty("first_name")] string? FirstName,
-    [property: JsonProperty("last_name")] string? LastName,
-    [property: JsonProperty("attributes")] Dictionary<string, object>? Attributes
+    [property: JsonPropertyName("key")] string Key,
+    [property: JsonPropertyName("email")] string Email,
+    [property: JsonPropertyName("first_name")] string? FirstName,
+    [property: JsonPropertyName("last_name")] string? LastName,
+    [property: JsonPropertyName("attributes")] Dictionary<string, object>? Attributes
 );
