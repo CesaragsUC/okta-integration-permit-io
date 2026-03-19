@@ -128,6 +128,7 @@ public class OktaUserRepository : IOktaUserRepository
                 Tenant = first.Tenant ?? string.Empty,
                 Email = first.Email ?? string.Empty,
                 Department = first.Department_s__c ?? string.Empty,
+                Organization = first.Organization ?? string.Empty,
                 Roles = rowList
                     .Where(r => !string.IsNullOrEmpty(r.Role_s__c))
                     .Select(r => r.Role_s__c!)

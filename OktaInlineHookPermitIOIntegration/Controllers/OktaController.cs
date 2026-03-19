@@ -16,7 +16,6 @@ public class OktaController : ControllerBase
     private readonly IConfiguration _configuration;
     private readonly IPermitAuthorizationService _authorizationService;
     private static readonly HashSet<string> _knownUser = new();
-    private static readonly HashSet<string> _knownRoles = new();
 
     public OktaController(
         ILogger<OktaController> logger,
@@ -162,19 +161,10 @@ public class OktaController : ControllerBase
             if (userMetis is null)
                 continue;
 
-            // 1. Create user in Permit.io
-            //await _authorizationService.CreateUserAsync(new PermitSyncUserRequest(
-            //        Key: SanitizeEmail(email),
-            //        Email: SanitizeEmail(email),
-            //        FirstName: firstName,
-            //        LastName: lastName,
-            //        Attributes: null));
-
-
 
             // a block in case okta call api multiple times.
-            if (_knownUser.Add(email))
-            {
+           // if (_knownUser.Add(email))
+          //  {
                 foreach (var role in userMetis.Roles)
                 {
                     var roleKey = ToPermitPattern(role);
@@ -183,6 +173,14 @@ public class OktaController : ControllerBase
                     await _authorizationService.GetOrCreateRoleAsync(roleKey, role);
 
                 }
+
+                var attributes = new Dictionary<string, object>
+                {
+                    { "department", userMetis.Department },
+                    { "organization", userMetis.Organization ?? string.Empty },
+                    { "zipcode", userMetis.ZipCodes.ToArray() },
+                    { "tenant", userMetis.Tenant.ToLower() }
+                };
 
                 var roleAssignments = userMetis.Roles.Select(role => new UserRoleCreate
                 {
@@ -196,23 +194,10 @@ public class OktaController : ControllerBase
                     Email = SanitizeEmail(email),
                     First_name = firstName,
                     Last_name = lastName,
-                    Role_assignments = roleAssignments
+                    Role_assignments = roleAssignments,
+                    Attributes = attributes,
                 });
-            }
-
-
-
-            // 2. Assign the roles and tenant
-            //foreach (var role in userMetis.Roles)
-            //{
-            //    var roleKey = ToPermitPattern(role);
-            //    // a block in case okta call api multiple times.
-            //    if (_knownRoles.Add(roleKey))
-            //    {
-            //        await _authorizationService.GetRoleAsync(roleKey, role);
-            //        await _authorizationService.AssignRoleAsync(SanitizeEmail(email), roleKey, userMetis.Tenant.ToLower());
-            //    }
-            //}
+           // }
         }
 
         return Ok();

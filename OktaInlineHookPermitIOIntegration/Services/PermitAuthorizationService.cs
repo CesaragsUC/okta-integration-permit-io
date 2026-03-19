@@ -213,10 +213,13 @@ public class PermitAuthorizationService : IPermitAuthorizationService
         {
             await _permit.Api.AssignRole(email, role, tenant);
         }
+        catch (PermitApiException ex) when (ex.Message.Contains("409") || ex.Message.Contains("Conflict"))
+        {
+            _logger.LogInformation("Role {Role} already assigned to {Email} in tenant {Tenant}", role, email, tenant);
+        }
         catch (PermitApiException ex)
         {
-
-            _logger.LogError(ex, $"Fail to Assign role to {email}");
+            _logger.LogError(ex, "Failed to assign role {Role} to {Email} in tenant {Tenant}", role, email, tenant);
             throw;
         }
 
@@ -239,10 +242,20 @@ public class PermitAuthorizationService : IPermitAuthorizationService
 
             return admin;
         }
-        catch (PermitApiException ex) when (ex.Message.Contains("409"))
+        catch (PermitApiException ex) when (ex.Message.Contains("409") || ex.Message.Contains("Conflict"))
         {
             _logger.LogError(ex, "Role Already exists");
             return null;
+        }
+        catch (PermitApiException ex) when (ex.Message.Contains("422"))
+        {
+            _logger.LogWarning("Invalid role data: {RoleKey}, Error: {Message}", roleKey, ex.Message);
+            return null;
+        }
+        catch (PermitApiException ex)
+        {
+            _logger.LogError(ex, "Unexpected error creating role: {RoleKey}", roleKey);
+            throw;
         }
     }
 
@@ -252,9 +265,13 @@ public class PermitAuthorizationService : IPermitAuthorizationService
         {
             await _permit.Api.CreateUser(user);
         }
-        catch (PermitApiException ex)
+        catch (PermitApiException ex) when (ex.Message.Contains("409") || ex.Message.Contains("Conflict"))
         {
-            throw;
+            _logger.LogInformation("User already exists: {Key}", user.Key);
+        }
+        catch (PermitApiException ex) when (ex.Message.Contains("422"))
+        {
+            _logger.LogWarning("Invalid user data: {Key}, Error: {Message}", user.Key, ex.Message);
         }
 
     }
@@ -269,14 +286,20 @@ public class PermitAuthorizationService : IPermitAuthorizationService
         }
         catch (PermitApiException ex) when (ex.Message.Contains("404"))
         {
-            role = await _permit.Api.CreateRole(new RoleCreate
+            try
             {
-                Key = roleKey,
-                Name = roleName,
-                Description = $"Role for {roleName} from Okta sync"
-            });
-
-            return role;
+                return await _permit.Api.CreateRole(new RoleCreate
+                {
+                    Key = roleKey,
+                    Name = roleName,
+                    Description = $"Role for {roleName} from Okta sync"
+                });
+            }
+            catch (PermitApiException ex2) when (ex2.Message.Contains("409"))
+            {
+                // Race condition: created by another request between Get and Create
+                return await _permit.Api.GetRole(roleKey);
+            }
         }
 
     }

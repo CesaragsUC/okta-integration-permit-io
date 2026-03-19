@@ -15,6 +15,7 @@ public sealed class UserMetisData
 {
     public Guid UserGuid { get; set; }
     public string Tenant { get; set; } = string.Empty;
+    public string? Organization { get; set; }
     public string Email { get; set; } = string.Empty;
     public string Department { get; set; } = string.Empty;
     public List<string> Roles { get; set; } = [];
